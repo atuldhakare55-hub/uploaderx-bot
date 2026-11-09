@@ -1,9 +1,10 @@
 import os
+import re
 import asyncio
 import threading
 from flask import Flask
 from hydrogram import Client, filters
-from hydrogram.types import ForceReply, InlineKeyboardMarkup, InlineKeyboardButton
+from hydrogram.types import ForceReply
 from hydrogram.errors import FloodWait
 
 # ================= CONFIGURATION =================
@@ -24,46 +25,43 @@ def run_flask():
     web_app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 # ================= SYSTEM STORAGE =================
-# Pehli baar jo /setowner command chalayega, wo permanent OWNER ban jayega
 OWNER_ID = None
-
-# Premium Users List
 PREMIUM_USERS = set()
 
-# Caption Se Hatane Wale Words
-REMOVE_WORDS = [
-    "Downloaded by UV",
-    "Downloaded by uv",
-    "Download by UV",
-    "Download by uv",
-    "@old_channel",
-    "Join our group",
-    "https://t.me/"
-]
-
-# Batches: { "101": {"title": "Maths Special", "start_id": 1, "end_id": 10} }
-BATCH_DB = {
-    "101": {
-        "title": "Batch 01 Demo",
-        "start_id": 1,
-        "end_id": 10
-    }
-}
+# Batches: { "batch_1": {"title": "Maths", "start_id": 10, "end_id": 25} }
+BATCH_DB = {}
+batch_counter = 101
 
 app = Client("batch_uploader_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+# States
 user_states = {}
+owner_batch_states = {}
 
 
-def clean_caption_text(caption: str, user_name: str, batch_title: str) -> str:
-    text = caption or ""
-    for word in REMOVE_WORDS:
-        text = text.replace(word, "")
-    text = text.strip()
-    watermark = f"\n\n━━━━━━━━━━━━━━━━━━━━\n📥 **Downloaded by:** {user_name}\n📚 **Batch:** {batch_title}"
-    return text + watermark
+def parse_telegram_link(link: str):
+    """
+    Link formats supported:
+    1. Public: https://t.me/channel_username/123
+    2. Private: https://t.me/c/1234567890/123
+    """
+    link = link.strip()
+    c_match = re.search(r"t\.me/c/(\d+)/(\d+)", link)
+    if c_match:
+        chat_id = int("-100" + c_match.group(1))
+        msg_id = int(c_match.group(2))
+        return chat_id, msg_id
+
+    pub_match = re.search(r"t\.me/([^/]+)/(\d+)", link)
+    if pub_match:
+        chat_id = pub_match.group(1)
+        msg_id = int(pub_match.group(2))
+        return chat_id, msg_id
+
+    return None, None
 
 
-# ================= 1. OWNER ONLY COMMANDS =================
+# ================= 1. OWNER MANAGEMENT =================
 
 @app.on_message(filters.command("setowner") & filters.private)
 async def set_owner_cmd(client, message):
@@ -81,8 +79,7 @@ async def set_owner_cmd(client, message):
 @app.on_message(filters.command("addpremium") & filters.private)
 async def add_prem_cmd(client, message):
     if message.from_user.id != OWNER_ID:
-        return await message.reply_text("❌ Sirf Owner hi premium users add kar sakta hai.")
-    
+        return await message.reply_text("❌ Sirf Owner premium add kar sakta hai.")
     parts = message.text.split()
     if len(parts) < 2:
         return await message.reply_text("Format: `/addpremium <user_id>`")
@@ -109,62 +106,23 @@ async def del_prem_cmd(client, message):
         await message.reply_text("❌ Invalid ID!")
 
 
-@app.on_message(filters.command("addword") & filters.private)
-async def add_word_cmd(client, message):
+# ================= 2. OWNER DUMP BATCH WORKFLOW (/uploaddbbatch) =================
+
+@app.on_message(filters.command("uploaddbbatch") & filters.private)
+async def upload_db_batch_cmd(client, message):
     if message.from_user.id != OWNER_ID:
-        return
-    word = message.text.replace("/addword", "").strip()
-    if not word:
-        return await message.reply_text("Format: `/addword <word_to_remove>`")
-    REMOVE_WORDS.append(word)
-    await message.reply_text(f"✅ Word blacklist me add ho gaya: `{word}`")
+        return await message.reply_text("❌ Sirf Owner batch dump me upload kar sakta hai.")
+
+    owner_batch_states[message.chat.id] = {}
+    await message.reply_text(
+        "🔗 **Pehli (First) Post ka Link bhejo:**\n\n"
+        "• Public link: `https://t.me/channel/10`\n"
+        "• Private link: `https://t.me/c/xxxxxx/10` *(Dhyan rahe private me bot Admin ho)*",
+        reply_markup=ForceReply(True)
+    )
 
 
-@app.on_message(filters.command("createbatch") & filters.private)
-async def create_batch_cmd(client, message):
-    if message.from_user.id != OWNER_ID:
-        return
-    # Format: /createbatch 102 Science Batch 1 50
-    parts = message.text.split()
-    if len(parts) < 5:
-        return await message.reply_text("Format: `/createbatch <code e.g. 102> <title> <start_id> <end_id>`")
-    
-    code = parts[1]
-    try:
-        start_id = int(parts[-2])
-        end_id = int(parts[-1])
-        title = " ".join(parts[2:-2])
-        BATCH_DB[code] = {
-            "title": title,
-            "start_id": start_id,
-            "end_id": end_id
-        }
-        await message.reply_text(f"✅ **Batch Created!**\nCode: `{code}`\nTitle: `{title}`\nRange: `{start_id}` to `{end_id}`")
-    except Exception as e:
-        await message.reply_text(f"❌ Error: {str(e)}")
-
-
-# ================= 2. DUMP CHANNEL ME SIRF OWNER VIDEO DAALEGA =================
-@app.on_message((filters.video | filters.document | filters.photo) & filters.private)
-async def owner_dump_uploader(client, message):
-    # Sirf Owner upload kar sakta hai Dump me
-    if message.from_user.id != OWNER_ID:
-        return await message.reply_text("❌ Sirf Owner Dump channel me video bhej sakta hai.")
-
-    msg = await message.reply_text("⏳ Dump channel me save ho raha hai...")
-    try:
-        copied = await message.copy(chat_id=DUMP_CHANNEL)
-        await msg.edit_text(
-            f"✅ **Dump Channel Me Upload Ho Gaya!**\n\n"
-            f"🆔 **Dump Message ID:** `{copied.id}`\n\n"
-            f"💡 Naya batch banane ke liye use karein:\n"
-            f"`/createbatch <batch_code> <title> {copied.id} {copied.id}`"
-        )
-    except Exception as e:
-        await msg.edit_text(f"❌ Dump Upload Error: `{str(e)}`")
-
-
-# ================= 3. USER UPLOAD FLOW =================
+# ================= 3. USER BATCH TRANSFER WORKFLOW (/upload) =================
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, message):
@@ -172,21 +130,29 @@ async def start_cmd(client, message):
     if uid == OWNER_ID:
         return await message.reply_text(
             "👑 **Owner Control Panel:**\n\n"
-            "• Video bhej kar Dump me daalein (ID mil jayegi)\n"
+            "• `/uploaddbbatch` - Channel se Dump me batch upload karein\n"
             "• `/addpremium <id>` - Buyer ko access dein\n"
             "• `/delpremium <id>` - Access hatayein\n"
-            "• `/addword <word>` - Caption clean word add karein\n"
-            "• `/createbatch <code> <title> <start> <end>` - Batch banayein\n"
-            "• `/upload` - Testing ke liye upload shuru karein"
+            "• `/batches` - Current active batch codes dekhein\n"
+            "• `/upload` - Batch transfer test karein"
         )
-    
-    is_prem = "✅ Premium Access Active" if uid in PREMIUM_USERS else "🔒 Access Denied (Contact Owner)"
+    is_prem = "✅ Premium Access Active" if uid in PREMIUM_USERS else "🔒 Access Denied"
     await message.reply_text(
         f"👋 **Namaste!**\n\n"
         f"🆔 **Your User ID:** `{uid}`\n"
         f"⭐ **Status:** {is_prem}\n\n"
-        f"Batch transfer karne ke liye `/upload` command use karein."
+        f"Batch transfer karne ke liye `/upload` command dein."
     )
+
+
+@app.on_message(filters.command("batches") & filters.private)
+async def list_batches_cmd(client, message):
+    if not BATCH_DB:
+        return await message.reply_text("ℹ️ Filhal koi batch available nahi hai.")
+    txt = "📋 **Available Batches:**\n\n"
+    for code, data in BATCH_DB.items():
+        txt += f"👉 Code: `{code}` | Title: **{data['title']}** (Dump IDs: {data['start_id']} to {data['end_id']})\n"
+    await message.reply_text(txt)
 
 
 @app.on_message(filters.command("upload") & filters.private)
@@ -198,124 +164,228 @@ async def upload_cmd(client, message):
             f"Access lene ke liye Admin ko apna User ID bhejein:\n👉 `{uid}`"
         )
 
+    if not BATCH_DB:
+        return await message.reply_text("❌ Filhal koi batch upload nahi hua hai.")
+
     user_states[uid] = {}
     batches = "\n".join([f"👉 `{k}` : {v['title']}" for k, v in BATCH_DB.items()])
     await message.reply_text(
-        f"📋 **Available Batches:**\n{batches}\n\n**Batch Code bhejo (e.g. 101):**",
+        f"📋 **Available Batches:**\n{batches}\n\n**Batch Code bhejo:**",
         reply_markup=ForceReply(True)
     )
 
 
-@app.on_message(filters.private & filters.reply)
-async def conversation_handler(client, message):
-    uid = message.chat.id
-    if uid not in user_states:
-        return
+# ================= 4. CENTRAL REPLY CONVERSATION HANDLER =================
 
-    state = user_states[uid]
+@app.on_message(filters.private & filters.reply)
+async def reply_conversation_handler(client, message):
+    uid = message.chat.id
     text = message.text.strip()
 
-    # Step 1: Batch Code Select
-    if "batch" not in state:
-        if text not in BATCH_DB:
-            await message.reply_text("❌ Galat batch code! Sahi code bhejo:", reply_markup=ForceReply(True))
+    # --- OWNER DB BATCH UPLOAD HANDLER ---
+    if uid in owner_batch_states and uid == OWNER_ID:
+        state = owner_batch_states[uid]
+
+        # Step 1: First Link
+        if "first_link" not in state:
+            chat_id, msg_id = parse_telegram_link(text)
+            if not chat_id:
+                return await message.reply_text("❌ Galat link format. Sahi link bhejo:", reply_markup=ForceReply(True))
+            state["source_chat"] = chat_id
+            state["start_id"] = msg_id
+            state["first_link"] = text
+            await message.reply_text("🔗 **Aakhri (Last) Post ka Link bhejo:**", reply_markup=ForceReply(True))
             return
-        state["batch"] = text
-        await message.reply_text(
-            "✅ **Target Channel/Group ID bhejo:**\n\n"
-            "⚠️ **Dhyan rahe:** Pehle mujhe (is bot ko) apne target channel/group me **Admin** banayein aur **Post Messages** permission dein.\n\n"
-            "Channel ID `-100...` format me bhejein:",
-            reply_markup=ForceReply(True)
-        )
-        return
 
-    # Step 2: Target ID aur Bot Admin Verify
-    if "target_chat" not in state:
-        try:
-            target_id = int(text)
-            chat = await client.get_chat(target_id)
-            bot_member = await client.get_chat_member(target_id, "me")
-
-            if not bot_member.privileges or not bot_member.privileges.can_post_messages:
-                await message.reply_text(
-                    "❌ **Bot Admin nahi hai!**\nTarget channel me bot ko Admin banakar 'Post Messages' permission dein aur dobara ID bhejein:",
-                    reply_markup=ForceReply(True)
-                )
-                return
-
-            state["target_chat"] = target_id
-            state["is_forum"] = getattr(chat, "is_forum", False)
-            state["chat_username"] = chat.username
-
-        except Exception:
+        # Step 2: Last Link
+        if "last_link" not in state:
+            chat_id, msg_id = parse_telegram_link(text)
+            if not chat_id or chat_id != state["source_chat"]:
+                return await message.reply_text("❌ Link galat hai ya channel match nahi hua. Same channel ki last post link bhejo:", reply_markup=ForceReply(True))
+            if msg_id < state["start_id"]:
+                return await message.reply_text("❌ Last post ID pehli post se badi honi chahiye. Dobara bhejo:", reply_markup=ForceReply(True))
+            state["end_id"] = msg_id
+            state["last_link"] = text
             await message.reply_text(
-                "❌ **Invalid ID ya bot Admin nahi hai!**\nSahi `-100...` ID bhejein aur bot ko Admin banayein:",
+                "✏️ **Batch ka Title/Name bhejo (e.g. Physics Crash Course):**",
                 reply_markup=ForceReply(True)
             )
             return
 
-        await message.reply_text(
-            "✅ Target Channel verify ho gaya!\n\n"
-            "Caption me **'Downloaded by'** ke aage kya naam/username daalna hai, wo likhkar bhejo:",
-            reply_markup=ForceReply(True)
-        )
-        return
-
-    # Step 3: Name / Username & File Transfer
-    if "user_name" not in state:
-        state["user_name"] = text
-        batch_key = state["batch"]
-        target_chat = state["target_chat"]
-        user_name = state["user_name"]
-        is_forum = state["is_forum"]
-        chat_username = state["chat_username"]
-
-        batch_info = BATCH_DB[batch_key]
-        status_msg = await message.reply_text("🚀 **Batch transfer shuru ho raha hai...**")
-
-        start_id = batch_info["start_id"]
-        end_id = batch_info["end_id"]
-        batch_title = batch_info["title"]
-
-        # Channel me Header Message
-        try:
-            header = await client.send_message(
-                chat_id=target_chat,
-                text=f"━━━━━━━━━━━━━━━━━━━━\n📚 **BATCH: {batch_title.upper()}**\n━━━━━━━━━━━━━━━━━━━━"
+        # Step 3: Batch Title
+        if "batch_title" not in state:
+            state["batch_title"] = text
+            await message.reply_text(
+                "🔄 **Caption Replacement Word bhejo:**\n\n"
+                "Format: `Old Word -> New Word`\n"
+                "*(Agar sirf word hatana hai to likho: `Downloaded by uv -> `)*\n"
+                "*(Agar koi word replace nahi karna toh `skip` likh do)*",
+                reply_markup=ForceReply(True)
             )
-        except Exception:
-            pass
+            return
 
-        # Loop transfer
-        for msg_id in range(start_id, end_id + 1):
-            try:
-                orig = await client.get_messages(DUMP_CHANNEL, msg_id)
-                if not orig or orig.empty:
+        # Step 4: Word Replacement & Auto-Upload to Dump
+        if "replace_done" not in state:
+            old_word, new_word = "", ""
+            if text.lower() != "skip":
+                if "->" in text:
+                    parts = text.split("->")
+                    old_word = parts[0].strip()
+                    new_word = parts[1].strip()
+                else:
+                    old_word = text.strip()
+                    new_word = ""
+
+            source_chat = state["source_chat"]
+            start_id = state["start_id"]
+            end_id = state["end_id"]
+            batch_title = state["batch_title"]
+
+            progress_msg = await message.reply_text("⏳ **Batch Dump Channel me upload hona shuru ho gaya hai...**")
+            
+            dump_first_id = None
+            dump_last_id = None
+            uploaded_count = 0
+
+            for m_id in range(start_id, end_id + 1):
+                try:
+                    src_msg = await client.get_messages(source_chat, m_id)
+                    if not src_msg or src_msg.empty:
+                        continue
+
+                    # Caption replacement
+                    caption = src_msg.caption or ""
+                    if old_word and old_word in caption:
+                        caption = caption.replace(old_word, new_word)
+
+                    # Dump me copy
+                    copied = await client.copy_message(
+                        chat_id=DUMP_CHANNEL,
+                        from_chat_id=source_chat,
+                        message_id=m_id,
+                        caption=caption
+                    )
+
+                    if dump_first_id is None:
+                        dump_first_id = copied.id
+                    dump_last_id = copied.id
+                    uploaded_count += 1
+
+                    await asyncio.sleep(2)
+
+                except FloodWait as e:
+                    await asyncio.sleep(e.value + 1)
+                except Exception:
                     continue
 
-                new_caption = clean_caption_text(orig.caption, user_name, batch_title)
+            global batch_counter
+            batch_code = f"batch_{batch_counter}"
+            batch_counter += 1
 
-                await client.copy_message(
-                    chat_id=target_chat,
-                    from_chat_id=DUMP_CHANNEL,
-                    message_id=msg_id,
-                    caption=new_caption
+            if dump_first_id and dump_last_id:
+                BATCH_DB[batch_code] = {
+                    "title": batch_title,
+                    "start_id": dump_first_id,
+                    "end_id": dump_last_id
+                }
+                await progress_msg.edit_text(
+                    f"🎉 **Batch Successfully Dump Me Store Ho Gaya!**\n\n"
+                    f"📦 **Batch Title:** `{batch_title}`\n"
+                    f"🔑 **Batch Code (User ko dene ke liye):** `{batch_code}`\n"
+                    f"📊 **Total Files Uploaded:** `{uploaded_count}`\n"
+                    f"📍 **Dump IDs:** `{dump_first_id}` to `{dump_last_id}`\n\n"
+                    f"Ab koi bhi user `/upload` command dekar ye code `{batch_code}` dalega to ye batch transfer ho jayega!"
                 )
-                await asyncio.sleep(2.5)
+            else:
+                await progress_msg.edit_text("❌ Koi bhi message transfer nahi ho paya. Channel permissions check karein.")
 
-            except FloodWait as e:
-                await asyncio.sleep(e.value + 1)
-                await client.copy_message(
-                    chat_id=target_chat,
-                    from_chat_id=DUMP_CHANNEL,
-                    message_id=msg_id,
-                    caption=new_caption
-                )
+            owner_batch_states.pop(uid, None)
+            return
+
+    # --- USER BATCH TRANSFER HANDLER ---
+    if uid in user_states:
+        state = user_states[uid]
+
+        # Step 1: Batch Code
+        if "batch" not in state:
+            if text not in BATCH_DB:
+                return await message.reply_text("❌ Galat batch code! Sahi code bhejo:", reply_markup=ForceReply(True))
+            state["batch"] = text
+            await message.reply_text(
+                "✅ **Target Channel/Group ID bhejo:**\n\n"
+                "⚠️ **Zaroori:** Bot ko pehle target channel/group me **Admin** banayein with 'Post Messages' rights.\n\n"
+                "ID `-100...` format me bhejein:",
+                reply_markup=ForceReply(True)
+            )
+            return
+
+        # Step 2: Target Verification
+        if "target_chat" not in state:
+            try:
+                target_id = int(text)
+                chat = await client.get_chat(target_id)
+                bot_member = await client.get_chat_member(target_id, "me")
+
+                if not bot_member.privileges or not bot_member.privileges.can_post_messages:
+                    return await message.reply_text(
+                        "❌ Bot Admin nahi hai ya Post permission nahi hai! Admin banakar dobara ID bhejo:",
+                        reply_markup=ForceReply(True)
+                    )
+                state["target_chat"] = target_id
             except Exception:
-                continue
+                return await message.reply_text("❌ Invalid ID ya bot wahan Admin nahi hai. Sahi ID bhejo:", reply_markup=ForceReply(True))
 
-        await status_msg.edit_text("🎉 **Batch transfer poora ho gaya!**")
-        user_states.pop(uid, None)
+            await message.reply_text(
+                "✅ Target Channel verify ho gaya!\n\n"
+                "Caption me **'Downloaded by'** ke aage kya naam/username lagana hai, wo bhejo:",
+                reply_markup=ForceReply(True)
+            )
+            return
+
+        # Step 3: Name & Transfer to Target
+        if "user_name" not in state:
+            state["user_name"] = text
+            batch_key = state["batch"]
+            target_chat = state["target_chat"]
+            user_name = state["user_name"]
+
+            batch_info = BATCH_DB[batch_key]
+            status_msg = await message.reply_text("🚀 **Batch target channel me transfer ho raha hai...**")
+
+            start_id = batch_info["start_id"]
+            end_id = batch_info["end_id"]
+            batch_title = batch_info["title"]
+
+            for msg_id in range(start_id, end_id + 1):
+                try:
+                    orig = await client.get_messages(DUMP_CHANNEL, msg_id)
+                    if not orig or orig.empty:
+                        continue
+
+                    caption = orig.caption or ""
+                    clean_cap = caption + f"\n\n━━━━━━━━━━━━━━━━━━━━\n📥 **Downloaded by:** {user_name}\n📚 **Batch:** {batch_title}"
+
+                    await client.copy_message(
+                        chat_id=target_chat,
+                        from_chat_id=DUMP_CHANNEL,
+                        message_id=msg_id,
+                        caption=clean_cap
+                    )
+                    await asyncio.sleep(2.5)
+
+                except FloodWait as e:
+                    await asyncio.sleep(e.value + 1)
+                    await client.copy_message(
+                        chat_id=target_chat,
+                        from_chat_id=DUMP_CHANNEL,
+                        message_id=msg_id,
+                        caption=clean_cap
+                    )
+                except Exception:
+                    continue
+
+            await status_msg.edit_text("🎉 **Batch transfer complete ho gaya!**")
+            user_states.pop(uid, None)
 
 
 # ================= RUNNER =================
