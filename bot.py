@@ -25,7 +25,7 @@ login_states = {}
 # Bot Client
 app = Client("batch_uploader_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Userbot Client (Private/Restricted access ke liye)
+# Userbot Client (Private Channel Reader)
 user_client = None
 
 # ================= FLASK KEEP-ALIVE SERVER =================
@@ -48,17 +48,6 @@ def parse_telegram_link(link: str):
         return pub_match.group(1), int(pub_match.group(2))
 
     return None, None
-
-async def init_saved_userbot():
-    global user_client
-    if os.path.exists("user_session.session"):
-        try:
-            user_client = Client("user_session", api_id=API_ID, api_hash=API_HASH)
-            await user_client.start()
-            print("Logged in userbot loaded successfully!")
-        except Exception as e:
-            print(f"Userbot load failed: {e}")
-            user_client = None
 
 # ================= OWNER COMMANDS =================
 @app.on_message(filters.command("setowner") & filters.private)
@@ -130,7 +119,7 @@ async def upload_db_batch_cmd(client, message):
         "🔗 **Pehli (First) Post ka Link bhejo:**\n\n"
         "• Public link: `https://t.me/channel/10`\n"
         "• Private channel link: `https://t.me/c/xxxxxx/10`\n"
-        "*(Private link ke liye /login se account connect hona zaroori hai)*",
+        "*(Private channel ke liye `/login` connect hona zaroori hai)*",
         reply_markup=ForceReply(True)
     )
 
@@ -143,7 +132,7 @@ async def start_cmd(client, message):
         return await message.reply_text(
             f"👑 **Owner Control Panel:**\n\n"
             f"📱 **User Account:** {acc_status}\n\n"
-            "• `/login` - Private channel reading ke liye account jodein\n"
+            "• `/login` - Private channel reading ke liye account connect karein\n"
             "• `/uploaddbbatch` - Channel se Dump me batch upload karein\n"
             "• `/addpremium <id>` - Buyer ko access dein\n"
             "• `/delpremium <id>` - Access hatayein\n"
@@ -193,11 +182,10 @@ async def reply_conversation_handler(client, message):
     text = message.text.strip()
     global user_client
 
-    # --- 1. LOGIN CONVERSATION ---
+    # 1. LOGIN CONVERSATION
     if uid in login_states and uid == OWNER_ID:
         state = login_states[uid]
 
-        # Phone
         if "phone" not in state:
             phone = text.replace(" ", "")
             state["phone"] = phone
@@ -209,7 +197,7 @@ async def reply_conversation_handler(client, message):
                 state["phone_code_hash"] = code_hash.phone_code_hash
                 await message.reply_text(
                     "📩 Telegram par aaya hua **OTP Code** bhejein:\n"
-                    "*(Format: Har digit ke beech space dein, e.g. `1 2 3 4 5`)*",
+                    "*(Format: Har digit ke beech space dein, jaise: `1 2 3 4 5`)*",
                     reply_markup=ForceReply(True)
                 )
             except Exception as e:
@@ -218,7 +206,6 @@ async def reply_conversation_handler(client, message):
                 return await message.reply_text(f"❌ Error: {str(e)}")
             return
 
-        # OTP
         if "code" not in state:
             otp_code = text.replace(" ", "")
             tmp_client = state["client"]
@@ -229,7 +216,7 @@ async def reply_conversation_handler(client, message):
                 await tmp_client.sign_in(phone, phone_code_hash, otp_code)
                 user_client = tmp_client
                 login_states.pop(uid, None)
-                return await message.reply_text("🎉 **Account Successfully Login Ho Gaya!**\nAb aap kisi bhi private channel ki post dump me copy kar sakte hain.")
+                return await message.reply_text("🎉 **Account Successfully Login Ho Gaya!**\nAb private channels ki posts easily dump me upload hongi.")
             except SessionPasswordNeeded:
                 state["code"] = otp_code
                 return await message.reply_text(
@@ -243,14 +230,13 @@ async def reply_conversation_handler(client, message):
                 login_states.pop(uid, None)
                 return await message.reply_text(f"❌ Login Error: {str(e)}")
 
-        # 2FA Password
         if "password" not in state:
             tmp_client = state["client"]
             try:
                 await tmp_client.check_password(password=text)
                 user_client = tmp_client
                 login_states.pop(uid, None)
-                return await message.reply_text("🎉 **Account Successfully Login Ho Gaya!**\nAb private channels ki posts dump me upload ho jayengi.")
+                return await message.reply_text("🎉 **Account Successfully Login Ho Gaya!**\nAb private channels ki posts easily dump me upload hongi.")
             except PasswordHashInvalid:
                 return await message.reply_text("❌ Galat Password! Dobara koshish karein:", reply_markup=ForceReply(True))
             except Exception as e:
@@ -258,11 +244,10 @@ async def reply_conversation_handler(client, message):
                 login_states.pop(uid, None)
                 return await message.reply_text(f"❌ Password Error: {str(e)}")
 
-    # --- 2. OWNER DUMP BATCH HANDLER ---
+    # 2. OWNER DUMP BATCH HANDLER
     if uid in owner_batch_states and uid == OWNER_ID:
         state = owner_batch_states[uid]
 
-        # First Link
         if "first_link" not in state:
             chat_id, msg_id = parse_telegram_link(text)
             if not chat_id:
@@ -273,34 +258,30 @@ async def reply_conversation_handler(client, message):
             await message.reply_text("🔗 **Aakhri (Last) Post ka Link bhejo:**", reply_markup=ForceReply(True))
             return
 
-        # Last Link
         if "last_link" not in state:
             chat_id, msg_id = parse_telegram_link(text)
             if not chat_id or chat_id != state["source_chat"]:
-                return await message.reply_text("❌ Link galat hai ya channel match nahi hua. Same channel ki link bhejo:", reply_markup=ForceReply(True))
+                return await message.reply_text("❌ Link match nahi hua. Same channel ki link bhejo:", reply_markup=ForceReply(True))
             if msg_id < state["start_id"]:
                 return await message.reply_text("❌ Last post ID pehli se badi honi chahiye. Dobara bhejo:", reply_markup=ForceReply(True))
             state["end_id"] = msg_id
             state["last_link"] = text
             await message.reply_text(
-                "✏️ **Batch ka Title/Name bhejo (e.g. Physics Complete):**",
+                "✏️ **Batch ka Title/Name bhejo (e.g. Science Batch):**",
                 reply_markup=ForceReply(True)
             )
             return
 
-        # Title
         if "batch_title" not in state:
             state["batch_title"] = text
             await message.reply_text(
                 "🔄 **Caption Replacement Word bhejo:**\n\n"
                 "Format: `Old Word -> New Word`\n"
-                "*(Example: `Downloaded by UV -> Downloaded by _`)*\n"
                 "*(Agar koi word replace nahi karna toh `skip` likhein)*",
                 reply_markup=ForceReply(True)
             )
             return
 
-        # Dump Upload
         if "replace_done" not in state:
             old_word, new_word = "", ""
             if text.lower() != "skip":
@@ -319,9 +300,6 @@ async def reply_conversation_handler(client, message):
 
             is_private = isinstance(source_chat, int)
             reader = user_client if (is_private and user_client) else client
-
-            if is_private and not user_client:
-                await message.reply_text("⚠️ Private channel se fetch karne ke liye `/login` connect karein. Abhi bot se koshish ho rahi hai...")
 
             progress_msg = await message.reply_text("⏳ **Batch Dump Channel me upload hona shuru ho gaya hai...**")
             
@@ -384,7 +362,7 @@ async def reply_conversation_handler(client, message):
             owner_batch_states.pop(uid, None)
             return
 
-    # --- 3. USER UPLOAD FLOW ---
+    # 3. USER UPLOAD FLOW
     if uid in user_states:
         state = user_states[uid]
 
@@ -467,22 +445,14 @@ async def reply_conversation_handler(client, message):
             user_states.pop(uid, None)
 
 
-# ================= RUNNER (NO SIGNAL CRASH) =================
-async def start_services():
-    await init_saved_userbot()
-    await app.start()
-    print("Telegram Bot Started Successfully!")
-    while True:
-        await asyncio.sleep(3600)
-
-def run_telegram_loop():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(start_services())
-
-if __name__ == "__main__":
-    t = threading.Thread(target=run_telegram_loop, daemon=True)
-    t.start()
-
+# ================= RUNNER (MAIN THREAD BOT + BG FLASK) =================
+def run_flask():
     port = int(os.environ.get("PORT", 10000))
     web_app.run(host="0.0.0.0", port=port, use_reloader=False)
+
+if __name__ == "__main__":
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    print("Starting Telegram Bot on Main Thread...")
+    app.run()
