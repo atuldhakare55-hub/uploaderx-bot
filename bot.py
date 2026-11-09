@@ -197,7 +197,7 @@ async def reply_conversation_handler(client, message):
     if uid in login_states and uid == OWNER_ID:
         state = login_states[uid]
 
-        # Step 1: Phone number
+        # Phone
         if "phone" not in state:
             phone = text.replace(" ", "")
             state["phone"] = phone
@@ -218,7 +218,7 @@ async def reply_conversation_handler(client, message):
                 return await message.reply_text(f"❌ Error: {str(e)}")
             return
 
-        # Step 2: OTP Code
+        # OTP
         if "code" not in state:
             otp_code = text.replace(" ", "")
             tmp_client = state["client"]
@@ -233,7 +233,7 @@ async def reply_conversation_handler(client, message):
             except SessionPasswordNeeded:
                 state["code"] = otp_code
                 return await message.reply_text(
-                    "🔐 Aapke account par Two-Step Verification ON hai. Apna **Password** bhejein:",
+                    "🔐 Two-Step Verification ON hai. Apna **Password** bhejein:",
                     reply_markup=ForceReply(True)
                 )
             except PhoneCodeInvalid:
@@ -243,14 +243,14 @@ async def reply_conversation_handler(client, message):
                 login_states.pop(uid, None)
                 return await message.reply_text(f"❌ Login Error: {str(e)}")
 
-        # Step 3: Two-Step Password
+        # 2FA Password
         if "password" not in state:
             tmp_client = state["client"]
             try:
                 await tmp_client.check_password(password=text)
                 user_client = tmp_client
                 login_states.pop(uid, None)
-                return await message.reply_text("🎉 **Account Successfully Login Ho Gaya!**\nAb private channels ki posts easily dump me upload ho jayengi.")
+                return await message.reply_text("🎉 **Account Successfully Login Ho Gaya!**\nAb private channels ki posts dump me upload ho jayengi.")
             except PasswordHashInvalid:
                 return await message.reply_text("❌ Galat Password! Dobara koshish karein:", reply_markup=ForceReply(True))
             except Exception as e:
@@ -262,7 +262,7 @@ async def reply_conversation_handler(client, message):
     if uid in owner_batch_states and uid == OWNER_ID:
         state = owner_batch_states[uid]
 
-        # Step 1: First Link
+        # First Link
         if "first_link" not in state:
             chat_id, msg_id = parse_telegram_link(text)
             if not chat_id:
@@ -273,7 +273,7 @@ async def reply_conversation_handler(client, message):
             await message.reply_text("🔗 **Aakhri (Last) Post ka Link bhejo:**", reply_markup=ForceReply(True))
             return
 
-        # Step 2: Last Link
+        # Last Link
         if "last_link" not in state:
             chat_id, msg_id = parse_telegram_link(text)
             if not chat_id or chat_id != state["source_chat"]:
@@ -288,7 +288,7 @@ async def reply_conversation_handler(client, message):
             )
             return
 
-        # Step 3: Batch Title
+        # Title
         if "batch_title" not in state:
             state["batch_title"] = text
             await message.reply_text(
@@ -300,7 +300,7 @@ async def reply_conversation_handler(client, message):
             )
             return
 
-        # Step 4: Dump Upload Execution
+        # Dump Upload
         if "replace_done" not in state:
             old_word, new_word = "", ""
             if text.lower() != "skip":
@@ -317,12 +317,11 @@ async def reply_conversation_handler(client, message):
             end_id = state["end_id"]
             batch_title = state["batch_title"]
 
-            # Reader decide karo: Public ke liye bot, Private ke liye logged-in user client
             is_private = isinstance(source_chat, int)
             reader = user_client if (is_private and user_client) else client
 
             if is_private and not user_client:
-                await message.reply_text("⚠️ Private channel se fetch karne ke liye pehle `/login` command se account jodein. Abhi bot direct fetch karne ki koshish kar raha hai...")
+                await message.reply_text("⚠️ Private channel se fetch karne ke liye `/login` connect karein. Abhi bot se koshish ho rahi hai...")
 
             progress_msg = await message.reply_text("⏳ **Batch Dump Channel me upload hona shuru ho gaya hai...**")
             
@@ -340,7 +339,6 @@ async def reply_conversation_handler(client, message):
                     if old_word and old_word in caption:
                         caption = caption.replace(old_word, new_word)
 
-                    # Agar media restricted channel me hai to user client se copy ya bot se copy
                     if reader != client:
                         copied = await src_msg.copy(chat_id=DUMP_CHANNEL, caption=caption)
                     else:
@@ -381,7 +379,7 @@ async def reply_conversation_handler(client, message):
                     f"📍 **Dump IDs:** `{dump_first_id}` to `{dump_last_id}`"
                 )
             else:
-                await progress_msg.edit_text("❌ Koi message transfer nahi ho paya. Permissions check karein.")
+                await progress_msg.edit_text("❌ Koi message transfer nahi ho paya. Channel permissions check karein.")
 
             owner_batch_states.pop(uid, None)
             return
@@ -469,16 +467,22 @@ async def reply_conversation_handler(client, message):
             user_states.pop(uid, None)
 
 
-# ================= RUNNER =================
-def run_telegram_bot():
+# ================= RUNNER (NO SIGNAL CRASH) =================
+async def start_services():
+    await init_saved_userbot()
+    await app.start()
+    print("Telegram Bot Started Successfully!")
+    while True:
+        await asyncio.sleep(3600)
+
+def run_telegram_loop():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(init_saved_userbot())
-    app.run()
+    loop.run_until_complete(start_services())
 
 if __name__ == "__main__":
-    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
-    bot_thread.start()
+    t = threading.Thread(target=run_telegram_loop, daemon=True)
+    t.start()
 
     port = int(os.environ.get("PORT", 10000))
     web_app.run(host="0.0.0.0", port=port, use_reloader=False)
