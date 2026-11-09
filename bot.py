@@ -2,9 +2,9 @@ import os
 import asyncio
 import threading
 from flask import Flask
-from pyrogram import Client, filters
-from pyrogram.types import ForceReply, InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import FloodWait
+from hydrogram import Client, filters
+from hydrogram.types import ForceReply, InlineKeyboardMarkup, InlineKeyboardButton
+from hydrogram.errors import FloodWait
 
 # Credentials
 API_ID = 37940634
@@ -12,7 +12,7 @@ API_HASH = "6c9bf207b1eba747bb4ae29d8b8fa8e8"
 BOT_TOKEN = "9222539598:AAFW3n-K_FYVyzwgpb8ApMYDVRdH1Er8oJM"
 DUMP_CHANNEL = -1004474620195
 
-# Free Web Service ke liye Dummy Web Server
+# Render Free Port Binding
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -212,7 +212,5 @@ async def conversation_handler(client, message):
 
 
 if __name__ == "__main__":
-    # Flask ko alag thread me start karega taaki Render Free Web Service chalu rahe
     threading.Thread(target=run_flask, daemon=True).start()
     app.run()
-            
