@@ -1,15 +1,29 @@
+import os
 import asyncio
+import threading
+from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.types import ForceReply, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
 
-# Credentials Set
+# Credentials
 API_ID = 37940634
 API_HASH = "6c9bf207b1eba747bb4ae29d8b8fa8e8"
 BOT_TOKEN = "9222539598:AAFW3n-K_FYVyzwgpb8ApMYDVRdH1Er8oJM"
 DUMP_CHANNEL = -1004474620195
 
-# Jo text ya link caption se hatane hain
+# Free Web Service ke liye Dummy Web Server
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "Bot is running 24/7!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host="0.0.0.0", port=port)
+
+# Caption se hatane wale words
 REMOVE_WORDS = [
     "Downloaded by UV",
     "Downloaded by uv",
@@ -20,7 +34,7 @@ REMOVE_WORDS = [
     "https://t.me/"
 ]
 
-# Batch Mapping (Yahan Message ID Range update kar lena jab batch daalo)
+# Batch Mapping
 BATCH_DB = {
     "101": {
         "title": "Batch 01 Demo",
@@ -124,7 +138,7 @@ async def conversation_handler(client, message):
         for sub_name, (start_id, end_id) in batch_info["subjects"].items():
             thread_id = None
 
-            # Forum/Topics group ho toh naya Topic banayega
+            # Forum/Topics group ho toh Topic banayega
             if is_forum:
                 try:
                     topic = await client.create_forum_topic(chat_id=target_chat, title=f"📚 {sub_name}")
@@ -198,4 +212,7 @@ async def conversation_handler(client, message):
 
 
 if __name__ == "__main__":
+    # Flask ko alag thread me start karega taaki Render Free Web Service chalu rahe
+    threading.Thread(target=run_flask, daemon=True).start()
     app.run()
+            
